@@ -1,8 +1,6 @@
 import SwiftUI
 import MapKit
 
-public init(_ title: LocalizedStringKey, coordinate: CLLocationCoordinate2D, @ViewBuilder content: () -> some View)
-
 // Protocol Definition
 protocol MapAnnotationProtocol {
     var coordinate: CLLocationCoordinate2D { get }
@@ -48,6 +46,8 @@ class LocationSearch: ObservableObject {
 struct ContentView: View {
     @State private var searchQuery = "UMass Lowell"
     @StateObject var locationSearch = LocationSearch()
+
+    // Parking Meters with Custom Annotations
     @State private var parkingMeters: [CustomMapAnnotation] = [
         CustomMapAnnotation(coordinate: CLLocationCoordinate2D(latitude: 42.6335, longitude: -71.3161), status: "available"),
         CustomMapAnnotation(coordinate: CLLocationCoordinate2D(latitude: 42.6340, longitude: -71.3155), status: "occupied"),
@@ -65,15 +65,16 @@ struct ContentView: View {
                 }
 
             // Map with Custom Annotations
-            // Updated Map with Annotation API
-            Map(coordinateRegion: $locationSearch.region, showsUserLocation: false, annotationItems: parkingMeters) { meter in
+            Map(coordinateRegion: $locationSearch.region, annotationItems: parkingMeters) { meter in
                 Annotation("Parking Meter", coordinate: meter.coordinate) {
-                    VStack {
+                    VStack(spacing: 5) {
+                        // Status Indicator Circle
                         Circle()
                             .fill(meter.status == "available" ? Color.green : Color.red)
                             .frame(width: 10, height: 10)
                             .accessibilityLabel("Parking meter with status \(meter.status)")
 
+                        // Status Text
                         Text(meter.status)
                             .font(.caption)
                             .padding(4)
@@ -85,7 +86,7 @@ struct ContentView: View {
             }
             .ignoresSafeArea()
 
-            // Display Error Message
+            // Display Error Message (if any)
             if let errorMessage = locationSearch.errorMessage {
                 Text(errorMessage)
                     .foregroundColor(.red)
@@ -95,3 +96,7 @@ struct ContentView: View {
     }
 }
 
+// Preview
+struct ContentView_Previews: PreviewProvider {
+    static var previews: some View {
+        ContentView()
