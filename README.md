@@ -1,11 +1,45 @@
 import SwiftUI
 import MapKit
 
-// MARK: - Custom Annotation Struct
+// MARK: - Custom Map Annotation
 struct CustomMapAnnotation: Identifiable, Codable {
     let id: UUID
     var coordinate: CLLocationCoordinate2D
     var status: String // "available", "occupied", "out_of_service"
+
+    // Coding keys for manual encoding/decoding
+    enum CodingKeys: String, CodingKey {
+        case id
+        case latitude
+        case longitude
+        case status
+    }
+
+    // Decoding: Reconstruct CLLocationCoordinate2D
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(UUID.self, forKey: .id)
+        let latitude = try container.decode(CLLocationDegrees.self, forKey: .latitude)
+        let longitude = try container.decode(CLLocationDegrees.self, forKey: .longitude)
+        coordinate = CLLocationCoordinate2D(latitude: latitude, longitude: longitude)
+        status = try container.decode(String.self, forKey: .status)
+    }
+
+    // Encoding: Serialize CLLocationCoordinate2D into latitude and longitude
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(id, forKey: .id)
+        try container.encode(coordinate.latitude, forKey: .latitude)
+        try container.encode(coordinate.longitude, forKey: .longitude)
+        try container.encode(status, forKey: .status)
+    }
+
+    // Default initializer
+    init(id: UUID = UUID(), coordinate: CLLocationCoordinate2D, status: String) {
+        self.id = id
+        self.coordinate = coordinate
+        self.status = status
+    }
 }
 
 // MARK: - Location Search ViewModel
@@ -13,8 +47,7 @@ class LocationSearch: ObservableObject {
     @Published var region: MKCoordinateRegion
     @Published var errorMessage: String?
     @Published var recentSearches: [String] = [] // Store search history
-    @Published var mapView = MKMapView()
-    
+
     init() {
         self.region = MKCoordinateRegion(
             center: CLLocationCoordinate2D(latitude: 42.6334, longitude: -71.3162),
@@ -130,17 +163,16 @@ struct ContentView: View {
     var body: some View {
         NavigationView {
             VStack {
-                // App Header
+                // Header
                 Text("TelePark")
                     .font(.largeTitle)
-                    .fontWeight(.bold)
                     .padding()
 
                 Divider()
 
-                // Search Bar with Recent Searches
+                // Search Bar and Recent Searches
                 VStack(alignment: .leading) {
-                    TextField("Search for a location in Lowell", text: $searchQuery)
+                    TextField("Search for a location", text: $searchQuery)
                         .textFieldStyle(RoundedBorderTextFieldStyle())
                         .padding(.horizontal)
                         .onSubmit {
@@ -172,66 +204,28 @@ struct ContentView: View {
                 Divider()
 
                 // Map View
-                ZStack {
-                    Map(
-                        coordinateRegion: $locationSearch.region,
-                        interactionModes: [.all],
-                        annotationItems: parkingManager.parkingMeters
-                    ) { meter in
-                        MapAnnotation(coordinate: meter.coordinate) {
-                            VStack {
-                                Circle()
-                                    .fill(meter.status == "available" ? Color.green : meter.status == "occupied" ? Color.red : Color.gray)
-                                    .frame(width: 10, height: 10)
-                                    .onTapGesture {
-                                        if parkingManager.isLoggedIn {
-                                            selectedMeter = meter
-                                        }
+                Map(coordinateRegion: $locationSearch.region, interactionModes: [.all], annotationItems: parkingManager.parkingMeters) { meter in
+                    MapAnnotation(coordinate: meter.coordinate) {
+                        VStack {
+                            Circle()
+                                .fill(meter.status == "available" ? Color.green : meter.status == "occupied" ? Color.red : Color.gray)
+                                .frame(width: 10, height: 10)
+                                .onTapGesture {
+                                    if parkingManager.isLoggedIn {
+                                        selectedMeter = meter
                                     }
-                            }
-                        }
-                    }
-                    .frame(height: 300)
-                    .gesture(
-                        DragGesture()
-                            .onEnded { _ in
-                                if parkingManager.isLoggedIn, let selected = selectedMeter {
-                                    let newCoordinate = CLLocationCoordinate2D(latitude: locationSearch.region.center.latitude, longitude: locationSearch.region.center.longitude)
-                                    parkingManager.moveMeter(id: selected.id, to: newCoordinate)
-                                    selectedMeter = nil
                                 }
-                            }
-                    )
-
-                    // Zoom Controls
-                    VStack {
-                        Spacer()
-                        HStack {
-                            Spacer()
-                            VStack {
-                                Button(action: {
-                                    zoomMap(by: 0.5)
-                                }) {
-                                    Image(systemName: "plus.magnifyingglass")
-                                        .padding()
-                                        .background(Color.white)
-                                        .clipShape(Circle())
-                                }
-                                Button(action: {
-                                    zoomMap(by: 2.0)
-                                }) {
-                                    Image(systemName: "minus.magnifyingglass")
-                                        .padding()
-                                        .background(Color.white)
-                                        .clipShape(Circle())
-                                }
-                            }
-                            .padding()
+                            Text(meter.status.capitalized)
+                                .font(.caption)
+                                .padding(4)
+                                .background(Color.white)
+                                .cornerRadius(5)
                         }
                     }
                 }
+                .frame(height: 300)
 
-                // Nearest Available Spot Button
+                // Actions
                 Button("Find Nearest Available Spot") {
                     if let nearest = parkingManager.parkingMeters.filter({ $0.status == "available" }).first {
                         locationSearch.setRegion(to: nearest.coordinate)
@@ -240,7 +234,6 @@ struct ContentView: View {
                     }
                 }
                 .padding()
-                .buttonStyle(.borderedProminent)
 
                 if let errorMessage = locationSearch.errorMessage {
                     Text(errorMessage)
@@ -257,16 +250,12 @@ struct ContentView: View {
                     .padding()
                 }
 
-                if parkingManager.isLoggedIn {
-                    Button("Logout") {
-                        parkingManager.isLoggedIn = false
-                    }
-                } else {
-                    Button("Login as Parking Director") {
-                        parkingManager.showLoginSheet = true
-                    }
-                    .padding()
+                Button(parkingManager.isLoggedIn ? "Logout" : "Login as Parking Director") {
+                    parkingManager.showLoginSheet = true
                 }
+                .padding()
+
+                Spacer()
             }
             .sheet(isPresented: $parkingManager.showLoginSheet) {
                 VStack {
@@ -283,27 +272,6 @@ struct ContentView: View {
                 }
                 .padding()
             }
-        }
-    }
-
-    // Zoom map by a factor
-    private func zoomMap(by factor: Double) {
-        let span = MKCoordinateSpan(
-            latitudeDelta: locationSearch.region.span.latitudeDelta * factor,
-            longitudeDelta: locationSearch.region.span.longitudeDelta * factor
-        )
-        locationSearch.region.span = span
-    }
-}
-
-// MARK: - Feedback Form View
-struct FeedbackFormView: View {
-    var body: some View {
-        VStack {
-            Text("Feedback Form")
-                .font(.largeTitle)
-                .padding()
-            Link("Open Feedback Form", destination: URL(string: "https://forms.gle/example")!)
         }
     }
 }
