@@ -1,13 +1,8 @@
 import SwiftUI
 import MapKit
 
-// Protocol Definition
-protocol MapAnnotationProtocol {
-    var coordinate: CLLocationCoordinate2D { get }
-}
-
 // Custom Annotation Struct
-struct CustomMapAnnotation: Identifiable, MapAnnotationProtocol {
+struct CustomMapAnnotation: Identifiable {
     let id = UUID()
     let coordinate: CLLocationCoordinate2D
     var status: String // Available, Occupied, Out of Service
@@ -93,6 +88,7 @@ struct ContentView: View {
 
                 // Map
                 Map(coordinateRegion: $locationSearch.region, annotationItems: parkingManager.parkingMeters) { meter in
+                    // Use Annotation for lightweight markers
                     Annotation("Parking Meter", coordinate: meter.coordinate) {
                         VStack {
                             Circle()
