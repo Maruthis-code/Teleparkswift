@@ -3,15 +3,17 @@ import MapKit
 
 // MARK: - Custom Annotation Struct
 struct CustomMapAnnotation: Identifiable, Codable {
-    let id = UUID()
-    let coordinate: CLLocationCoordinate2D
-    var status: String // Available, Occupied, Out of Service
+    let id: UUID
+    var coordinate: CLLocationCoordinate2D
+    var status: String // "available", "occupied", "out_of_service"
 }
 
 // MARK: - Location Search ViewModel
 class LocationSearch: ObservableObject {
     @Published var region: MKCoordinateRegion
     @Published var errorMessage: String?
+    @Published var recentSearches: [String] = [] // Store search history
+    @Published var mapView = MKMapView()
     
     init() {
         self.region = MKCoordinateRegion(
@@ -36,10 +38,27 @@ class LocationSearch: ObservableObject {
                 return
             }
             DispatchQueue.main.async {
-                withAnimation {
-                    self?.region.center = location.coordinate
-                }
+                self?.setRegion(to: location.coordinate)
+                self?.addToRecentSearches(query: query)
             }
+        }
+    }
+
+    func setRegion(to coordinate: CLLocationCoordinate2D) {
+        withAnimation {
+            self.region = MKCoordinateRegion(
+                center: coordinate,
+                span: MKCoordinateSpan(latitudeDelta: 0.005, longitudeDelta: 0.005) // Zoom in tightly
+            )
+        }
+    }
+
+    private func addToRecentSearches(query: String) {
+        if !recentSearches.contains(query) {
+            recentSearches.insert(query, at: 0) // Add the latest search to the top
+        }
+        if recentSearches.count > 5 {
+            recentSearches.removeLast() // Keep only the last 5 searches
         }
     }
 }
@@ -58,9 +77,9 @@ class ParkingManager: ObservableObject {
             self.parkingMeters = savedMeters
         } else {
             self.parkingMeters = [
-                CustomMapAnnotation(coordinate: CLLocationCoordinate2D(latitude: 42.6335, longitude: -71.3161), status: "available"),
-                CustomMapAnnotation(coordinate: CLLocationCoordinate2D(latitude: 42.6340, longitude: -71.3155), status: "occupied"),
-                CustomMapAnnotation(coordinate: CLLocationCoordinate2D(latitude: 42.6329, longitude: -71.3170), status: "available")
+                CustomMapAnnotation(id: UUID(), coordinate: CLLocationCoordinate2D(latitude: 42.6335, longitude: -71.3161), status: "available"),
+                CustomMapAnnotation(id: UUID(), coordinate: CLLocationCoordinate2D(latitude: 42.6340, longitude: -71.3155), status: "occupied"),
+                CustomMapAnnotation(id: UUID(), coordinate: CLLocationCoordinate2D(latitude: 42.6329, longitude: -71.3170), status: "available")
             ]
         }
     }
@@ -85,69 +104,143 @@ class ParkingManager: ObservableObject {
         }
     }
 
-    func findNearestAvailableMeter(from location: CLLocationCoordinate2D) -> CustomMapAnnotation? {
-        let userLocation = CLLocation(latitude: location.latitude, longitude: location.longitude)
-        return parkingMeters
-            .filter { $0.status == "available" }
-            .min(by: {
-                let meterLocation1 = CLLocation(latitude: $0.coordinate.latitude, longitude: $0.coordinate.longitude)
-                let meterLocation2 = CLLocation(latitude: $1.coordinate.latitude, longitude: $1.coordinate.longitude)
-                return userLocation.distance(from: meterLocation1) < userLocation.distance(from: meterLocation2)
-            })
+    func addMeter(at coordinate: CLLocationCoordinate2D) {
+        let newMeter = CustomMapAnnotation(id: UUID(), coordinate: coordinate, status: "available")
+        parkingMeters.append(newMeter)
+        saveMeters()
+    }
+
+    func moveMeter(id: UUID, to coordinate: CLLocationCoordinate2D) {
+        if let index = parkingMeters.firstIndex(where: { $0.id == id }) {
+            parkingMeters[index].coordinate = coordinate
+            saveMeters()
+        }
     }
 }
 
-// MARK: - Content View
+// MARK: - Main Content View
 struct ContentView: View {
     @StateObject private var locationSearch = LocationSearch()
     @StateObject private var parkingManager = ParkingManager()
     @State private var searchQuery = ""
     @State private var password = ""
     @State private var showFeedbackForm = false
+    @State private var selectedMeter: CustomMapAnnotation?
 
     var body: some View {
         NavigationView {
             VStack {
+                // App Header
                 Text("TelePark")
                     .font(.largeTitle)
+                    .fontWeight(.bold)
                     .padding()
 
-                TextField("Search for a location", text: $searchQuery)
-                    .textFieldStyle(RoundedBorderTextFieldStyle())
-                    .padding()
-                    .onSubmit {
-                        locationSearch.searchLocation(query: searchQuery)
-                    }
+                Divider()
 
-                Map(coordinateRegion: $locationSearch.region, annotationItems: parkingManager.parkingMeters) { meter in
-                    Annotation("Parking Meter", coordinate: meter.coordinate) {
-                        VStack {
-                            Circle()
-                                .fill(meter.status == "available" ? Color.green : meter.status == "occupied" ? Color.red : Color.gray)
-                                .frame(width: 10, height: 10)
-                                .onTapGesture {
-                                    if parkingManager.isLoggedIn {
-                                        let newStatus = meter.status == "available" ? "occupied" : "available"
-                                        parkingManager.updateMeterStatus(id: meter.id, status: newStatus)
+                // Search Bar with Recent Searches
+                VStack(alignment: .leading) {
+                    TextField("Search for a location in Lowell", text: $searchQuery)
+                        .textFieldStyle(RoundedBorderTextFieldStyle())
+                        .padding(.horizontal)
+                        .onSubmit {
+                            locationSearch.searchLocation(query: searchQuery)
+                        }
+
+                    if !locationSearch.recentSearches.isEmpty {
+                        Text("Recent Searches:")
+                            .font(.headline)
+                            .padding(.horizontal)
+                        ScrollView(.horizontal, showsIndicators: false) {
+                            HStack {
+                                ForEach(locationSearch.recentSearches, id: \.self) { search in
+                                    Button(action: {
+                                        locationSearch.searchLocation(query: search)
+                                    }) {
+                                        Text(search)
+                                            .padding(8)
+                                            .background(Color.gray.opacity(0.2))
+                                            .cornerRadius(10)
                                     }
                                 }
-                            Text(meter.status.capitalized)
-                                .font(.caption)
-                                .background(Color.white)
-                                .cornerRadius(5)
+                            }
+                            .padding(.horizontal)
                         }
                     }
                 }
-                .frame(height: 300)
 
+                Divider()
+
+                // Map View
+                ZStack {
+                    Map(
+                        coordinateRegion: $locationSearch.region,
+                        interactionModes: [.all],
+                        annotationItems: parkingManager.parkingMeters
+                    ) { meter in
+                        MapAnnotation(coordinate: meter.coordinate) {
+                            VStack {
+                                Circle()
+                                    .fill(meter.status == "available" ? Color.green : meter.status == "occupied" ? Color.red : Color.gray)
+                                    .frame(width: 10, height: 10)
+                                    .onTapGesture {
+                                        if parkingManager.isLoggedIn {
+                                            selectedMeter = meter
+                                        }
+                                    }
+                            }
+                        }
+                    }
+                    .frame(height: 300)
+                    .gesture(
+                        DragGesture()
+                            .onEnded { _ in
+                                if parkingManager.isLoggedIn, let selected = selectedMeter {
+                                    let newCoordinate = CLLocationCoordinate2D(latitude: locationSearch.region.center.latitude, longitude: locationSearch.region.center.longitude)
+                                    parkingManager.moveMeter(id: selected.id, to: newCoordinate)
+                                    selectedMeter = nil
+                                }
+                            }
+                    )
+
+                    // Zoom Controls
+                    VStack {
+                        Spacer()
+                        HStack {
+                            Spacer()
+                            VStack {
+                                Button(action: {
+                                    zoomMap(by: 0.5)
+                                }) {
+                                    Image(systemName: "plus.magnifyingglass")
+                                        .padding()
+                                        .background(Color.white)
+                                        .clipShape(Circle())
+                                }
+                                Button(action: {
+                                    zoomMap(by: 2.0)
+                                }) {
+                                    Image(systemName: "minus.magnifyingglass")
+                                        .padding()
+                                        .background(Color.white)
+                                        .clipShape(Circle())
+                                }
+                            }
+                            .padding()
+                        }
+                    }
+                }
+
+                // Nearest Available Spot Button
                 Button("Find Nearest Available Spot") {
-                    if let nearest = parkingManager.findNearestAvailableMeter(from: locationSearch.region.center) {
-                        locationSearch.region.center = nearest.coordinate
+                    if let nearest = parkingManager.parkingMeters.filter({ $0.status == "available" }).first {
+                        locationSearch.setRegion(to: nearest.coordinate)
                     } else {
                         locationSearch.errorMessage = "No available parking spots nearby!"
                     }
                 }
                 .padding()
+                .buttonStyle(.borderedProminent)
 
                 if let errorMessage = locationSearch.errorMessage {
                     Text(errorMessage)
@@ -155,40 +248,51 @@ struct ContentView: View {
                         .padding()
                 }
 
-                Button("Provide Feedback") {
-                    showFeedbackForm = true
-                }
-                .sheet(isPresented: $showFeedbackForm) {
-                    FeedbackFormView()
-                }
-
                 Spacer()
 
-                if !parkingManager.isLoggedIn {
-                    Button("Parking Director Login") {
-                        parkingManager.showLoginSheet = true
+                if parkingManager.isLoggedIn {
+                    Button("Add Meter Here") {
+                        parkingManager.addMeter(at: locationSearch.region.center)
                     }
-                } else {
+                    .padding()
+                }
+
+                if parkingManager.isLoggedIn {
                     Button("Logout") {
                         parkingManager.isLoggedIn = false
                     }
+                } else {
+                    Button("Login as Parking Director") {
+                        parkingManager.showLoginSheet = true
+                    }
+                    .padding()
                 }
             }
-        }
-        .sheet(isPresented: $parkingManager.showLoginSheet) {
-            VStack {
-                Text("Enter Admin Password")
-                    .font(.headline)
-                    .padding()
-                SecureField("Password", text: $password)
-                    .textFieldStyle(RoundedBorderTextFieldStyle())
-                    .padding()
-                Button("Login") {
-                    parkingManager.login(password: password)
-                    password = ""
+            .sheet(isPresented: $parkingManager.showLoginSheet) {
+                VStack {
+                    Text("Enter Admin Password")
+                        .font(.headline)
+                        .padding()
+                    SecureField("Password", text: $password)
+                        .textFieldStyle(RoundedBorderTextFieldStyle())
+                        .padding()
+                    Button("Login") {
+                        parkingManager.login(password: password)
+                        password = ""
+                    }
                 }
+                .padding()
             }
         }
+    }
+
+    // Zoom map by a factor
+    private func zoomMap(by factor: Double) {
+        let span = MKCoordinateSpan(
+            latitudeDelta: locationSearch.region.span.latitudeDelta * factor,
+            longitudeDelta: locationSearch.region.span.longitudeDelta * factor
+        )
+        locationSearch.region.span = span
     }
 }
 
@@ -201,5 +305,12 @@ struct FeedbackFormView: View {
                 .padding()
             Link("Open Feedback Form", destination: URL(string: "https://forms.gle/example")!)
         }
+    }
+}
+
+// MARK: - Preview
+struct ContentView_Previews: PreviewProvider {
+    static var previews: some View {
+        ContentView()
     }
 }
