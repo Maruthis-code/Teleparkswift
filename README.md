@@ -69,7 +69,7 @@ class ParkingManager: ObservableObject {
     func findNearestAvailableMeter(from location: CLLocationCoordinate2D) -> CustomMapAnnotation? {
         return parkingMeters
             .filter { $0.status == "available" }
-            .min(by: { CLLocation(latitude: $0.coordinate.latitude, longitude: $0.coordinate.longitude).distance(from: CLLocation(latitude: location.latitude, longitude: location.longitude)) < CLLocation(latitude: $1.coordinate.latitude, longitude: $1.coordinate.longitude).distance(from: CLLocation(latitude: location.latitude, longitude: location.longitude)) })
+            .min(by: { CLLocation(latitude: $0.coordinate.latitude, longitude: $0.coordinate.longitude).distance(from: CLLocation(latitude: location.latitude, longitude: location.longitude)) < CLLocation(latitude: $1.coordinate.latitude, longitude: $1.coordinate.longitude)) })
     }
 }
 
@@ -93,7 +93,7 @@ struct ContentView: View {
 
                 // Map
                 Map(coordinateRegion: $locationSearch.region, annotationItems: parkingManager.parkingMeters) { meter in
-                    MapAnnotation(coordinate: meter.coordinate) {
+                    Annotation("Parking Meter", coordinate: meter.coordinate) {
                         VStack {
                             Circle()
                                 .fill(meter.status == "available" ? Color.green : meter.status == "occupied" ? Color.red : Color.gray)
