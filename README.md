@@ -6,16 +6,23 @@ struct CustomMapAnnotation: Identifiable, Codable {
     let id: UUID
     var coordinate: CLLocationCoordinate2D
     var status: String // "available", "occupied", "out_of_service"
+    var highlighted: Bool // New field for highlighting
 
-    // Coding keys for manual encoding/decoding
     enum CodingKeys: String, CodingKey {
         case id
         case latitude
         case longitude
         case status
+        case highlighted
     }
 
-    // Decoding: Reconstruct CLLocationCoordinate2D
+    init(id: UUID = UUID(), coordinate: CLLocationCoordinate2D, status: String, highlighted: Bool = false) {
+        self.id = id
+        self.coordinate = coordinate
+        self.status = status
+        self.highlighted = highlighted
+    }
+
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         id = try container.decode(UUID.self, forKey: .id)
@@ -23,22 +30,16 @@ struct CustomMapAnnotation: Identifiable, Codable {
         let longitude = try container.decode(CLLocationDegrees.self, forKey: .longitude)
         coordinate = CLLocationCoordinate2D(latitude: latitude, longitude: longitude)
         status = try container.decode(String.self, forKey: .status)
+        highlighted = try container.decode(Bool.self, forKey: .highlighted)
     }
 
-    // Encoding: Serialize CLLocationCoordinate2D into latitude and longitude
     func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(id, forKey: .id)
         try container.encode(coordinate.latitude, forKey: .latitude)
         try container.encode(coordinate.longitude, forKey: .longitude)
         try container.encode(status, forKey: .status)
-    }
-
-    // Default initializer
-    init(id: UUID = UUID(), coordinate: CLLocationCoordinate2D, status: String) {
-        self.id = id
-        self.coordinate = coordinate
-        self.status = status
+        try container.encode(highlighted, forKey: .highlighted)
     }
 }
 
@@ -46,7 +47,7 @@ struct CustomMapAnnotation: Identifiable, Codable {
 class LocationSearch: ObservableObject {
     @Published var region: MKCoordinateRegion
     @Published var errorMessage: String?
-    @Published var recentSearches: [String] = [] // Store search history
+    @Published var recentSearches: [String] = []
 
     init() {
         self.region = MKCoordinateRegion(
@@ -81,17 +82,17 @@ class LocationSearch: ObservableObject {
         withAnimation {
             self.region = MKCoordinateRegion(
                 center: coordinate,
-                span: MKCoordinateSpan(latitudeDelta: 0.005, longitudeDelta: 0.005) // Zoom in tightly
+                span: MKCoordinateSpan(latitudeDelta: 0.005, longitudeDelta: 0.005)
             )
         }
     }
 
     private func addToRecentSearches(query: String) {
         if !recentSearches.contains(query) {
-            recentSearches.insert(query, at: 0) // Add the latest search to the top
+            recentSearches.insert(query, at: 0)
         }
         if recentSearches.count > 5 {
-            recentSearches.removeLast() // Keep only the last 5 searches
+            recentSearches.removeLast()
         }
     }
 }
@@ -99,9 +100,9 @@ class LocationSearch: ObservableObject {
 // MARK: - Parking Manager ViewModel
 class ParkingManager: ObservableObject {
     @Published var isLoggedIn = false
-    @Published var showLoginSheet = false
     @Published var parkingMeters: [CustomMapAnnotation]
-    @Published var showParkingComplete = false
+    @Published var showLoginSheet = false
+
     private let adminPassword = "telepark123"
 
     init() {
@@ -110,9 +111,9 @@ class ParkingManager: ObservableObject {
             self.parkingMeters = savedMeters
         } else {
             self.parkingMeters = [
-                CustomMapAnnotation(id: UUID(), coordinate: CLLocationCoordinate2D(latitude: 42.6335, longitude: -71.3161), status: "available"),
-                CustomMapAnnotation(id: UUID(), coordinate: CLLocationCoordinate2D(latitude: 42.6340, longitude: -71.3155), status: "occupied"),
-                CustomMapAnnotation(id: UUID(), coordinate: CLLocationCoordinate2D(latitude: 42.6329, longitude: -71.3170), status: "available")
+                CustomMapAnnotation(coordinate: CLLocationCoordinate2D(latitude: 42.6335, longitude: -71.3161), status: "available"),
+                CustomMapAnnotation(coordinate: CLLocationCoordinate2D(latitude: 42.6340, longitude: -71.3155), status: "occupied"),
+                CustomMapAnnotation(coordinate: CLLocationCoordinate2D(latitude: 42.6329, longitude: -71.3170), status: "available")
             ]
         }
     }
@@ -126,28 +127,24 @@ class ParkingManager: ObservableObject {
     func login(password: String) {
         if password == adminPassword {
             isLoggedIn = true
-            showLoginSheet = false
         }
     }
 
-    func updateMeterStatus(id: UUID, status: String) {
+    func logout() {
+        isLoggedIn = false
+    }
+
+    func highlightMeter(id: UUID) {
         if let index = parkingMeters.firstIndex(where: { $0.id == id }) {
-            parkingMeters[index].status = status
+            parkingMeters[index].highlighted.toggle()
             saveMeters()
         }
     }
 
     func addMeter(at coordinate: CLLocationCoordinate2D) {
-        let newMeter = CustomMapAnnotation(id: UUID(), coordinate: coordinate, status: "available")
+        let newMeter = CustomMapAnnotation(coordinate: coordinate, status: "available")
         parkingMeters.append(newMeter)
         saveMeters()
-    }
-
-    func moveMeter(id: UUID, to coordinate: CLLocationCoordinate2D) {
-        if let index = parkingMeters.firstIndex(where: { $0.id == id }) {
-            parkingMeters[index].coordinate = coordinate
-            saveMeters()
-        }
     }
 }
 
@@ -157,63 +154,37 @@ struct ContentView: View {
     @StateObject private var parkingManager = ParkingManager()
     @State private var searchQuery = ""
     @State private var password = ""
-    @State private var showFeedbackForm = false
-    @State private var selectedMeter: CustomMapAnnotation?
 
     var body: some View {
         NavigationView {
             VStack {
-                // Header
-                Text("TelePark")
-                    .font(.largeTitle)
-                    .padding()
-
-                Divider()
-
-                // Search Bar and Recent Searches
-                VStack(alignment: .leading) {
-                    TextField("Search for a location", text: $searchQuery)
-                        .textFieldStyle(RoundedBorderTextFieldStyle())
-                        .padding(.horizontal)
-                        .onSubmit {
-                            locationSearch.searchLocation(query: searchQuery)
-                        }
-
-                    if !locationSearch.recentSearches.isEmpty {
-                        Text("Recent Searches:")
-                            .font(.headline)
-                            .padding(.horizontal)
-                        ScrollView(.horizontal, showsIndicators: false) {
-                            HStack {
-                                ForEach(locationSearch.recentSearches, id: \.self) { search in
-                                    Button(action: {
-                                        locationSearch.searchLocation(query: search)
-                                    }) {
-                                        Text(search)
-                                            .padding(8)
-                                            .background(Color.gray.opacity(0.2))
-                                            .cornerRadius(10)
-                                    }
-                                }
-                            }
-                            .padding(.horizontal)
+                HStack {
+                    Text("TelePark")
+                        .font(.largeTitle)
+                    Spacer()
+                    if parkingManager.isLoggedIn {
+                        Button("Logout") {
+                            parkingManager.logout()
                         }
                     }
                 }
+                .padding()
 
-                Divider()
+                TextField("Search location", text: $searchQuery)
+                    .textFieldStyle(RoundedBorderTextFieldStyle())
+                    .padding()
+                    .onSubmit {
+                        locationSearch.searchLocation(query: searchQuery)
+                    }
 
-                // Map View
-                Map(coordinateRegion: $locationSearch.region, interactionModes: [.all], annotationItems: parkingManager.parkingMeters) { meter in
+                Map(coordinateRegion: $locationSearch.region, annotationItems: parkingManager.parkingMeters) { meter in
                     MapAnnotation(coordinate: meter.coordinate) {
                         VStack {
                             Circle()
-                                .fill(meter.status == "available" ? Color.green : meter.status == "occupied" ? Color.red : Color.gray)
+                                .fill(meter.status == "available" ? (meter.highlighted ? Color.blue : Color.green) : Color.red)
                                 .frame(width: 10, height: 10)
                                 .onTapGesture {
-                                    if parkingManager.isLoggedIn {
-                                        selectedMeter = meter
-                                    }
+                                    parkingManager.highlightMeter(id: meter.id)
                                 }
                             Text(meter.status.capitalized)
                                 .font(.caption)
@@ -225,22 +196,6 @@ struct ContentView: View {
                 }
                 .frame(height: 300)
 
-                // Actions
-                Button("Find Nearest Available Spot") {
-                    if let nearest = parkingManager.parkingMeters.filter({ $0.status == "available" }).first {
-                        locationSearch.setRegion(to: nearest.coordinate)
-                    } else {
-                        locationSearch.errorMessage = "No available parking spots nearby!"
-                    }
-                }
-                .padding()
-
-                if let errorMessage = locationSearch.errorMessage {
-                    Text(errorMessage)
-                        .foregroundColor(.red)
-                        .padding()
-                }
-
                 Spacer()
 
                 if parkingManager.isLoggedIn {
@@ -248,20 +203,17 @@ struct ContentView: View {
                         parkingManager.addMeter(at: locationSearch.region.center)
                     }
                     .padding()
+                } else {
+                    Button("Login as Admin") {
+                        parkingManager.showLoginSheet = true
+                    }
+                    .padding()
                 }
-
-                Button(parkingManager.isLoggedIn ? "Logout" : "Login as Parking Director") {
-                    parkingManager.showLoginSheet = true
-                }
-                .padding()
-
-                Spacer()
             }
             .sheet(isPresented: $parkingManager.showLoginSheet) {
                 VStack {
-                    Text("Enter Admin Password")
+                    Text("Admin Login")
                         .font(.headline)
-                        .padding()
                     SecureField("Password", text: $password)
                         .textFieldStyle(RoundedBorderTextFieldStyle())
                         .padding()
