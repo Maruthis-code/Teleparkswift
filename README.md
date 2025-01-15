@@ -45,8 +45,6 @@ extension Double {
     }
 }
 
-extension CLLocationCoordinate2D: Codable {}
-
 // MARK: - Haversine Formula
 func haversineDistance(lat1: Double, lon1: Double, lat2: Double, lon2: Double) -> Double {
     let radiusEarthKm = 6371.0
@@ -65,7 +63,9 @@ class ParkingManager: ObservableObject {
     @Published var userSearches: [CLLocationCoordinate2D] = []
     @Published var selectedMeter: CustomMapAnnotation?
     @Published var nearestMeter: (CustomMapAnnotation, Double)?
+    @Published var errorMessage: String?
 
+    // Initialize meters with predefined locations
     func initializeMeters() {
         parkingMeters = [
             CustomMapAnnotation(coordinate: CLLocationCoordinate2D(latitude: 42.6334, longitude: -71.3162), status: "available"),
@@ -76,13 +76,16 @@ class ParkingManager: ObservableObject {
         ]
     }
 
+    // Add user search to the history
     func addUserSearch(at coordinate: CLLocationCoordinate2D) {
         userSearches.append(coordinate)
     }
 
+    // Find the nearest green meter
     func findNearestGreenMeter(to location: CLLocationCoordinate2D) {
         let availableMeters = parkingMeters.filter { $0.status == "available" }
         guard !availableMeters.isEmpty else {
+            errorMessage = "No available green meters found."
             nearestMeter = nil
             return
         }
@@ -106,6 +109,7 @@ class ParkingManager: ObservableObject {
         if let closest = closestMeter {
             nearestMeter = (closest, smallestDistance)
         } else {
+            errorMessage = "No green meters within range."
             nearestMeter = nil
         }
     }
@@ -149,7 +153,7 @@ struct ContentView: View {
 
                 Divider()
 
-                // Map with Meters
+                // Map with Annotations
                 ZStack {
                     Map(
                         coordinateRegion: $locationSearch.region,
@@ -163,43 +167,35 @@ struct ContentView: View {
                         }
                     }
                     .frame(height: 300)
+                    .onAppear {
+                        parkingManager.initializeMeters()
+                    }
                 }
 
                 // Search Bar
-                TextField("Search for location (lat, lon)", text: $locationSearch.searchText, onCommit: {
-                    let components = locationSearch.searchText.split(separator: ",")
-                    if components.count == 2,
-                       let lat = Double(components[0]),
-                       let lon = Double(components[1]) {
-                        userLocation = CLLocationCoordinate2D(latitude: lat, longitude: lon)
-                        parkingManager.addUserSearch(at: userLocation!)
-                        parkingManager.findNearestGreenMeter(to: userLocation!)
-
-                        if let nearest = parkingManager.nearestMeter {
-                            print("Nearest green meter: \(nearest.0.coordinate), Distance: \(nearest.1) km")
-                        } else {
-                            print("No available green meters nearby.")
-                        }
-                    }
+                TextField("Search location (lat, lon)", text: $locationSearch.searchText, onCommit: {
+                    handleSearch()
                 })
                 .textFieldStyle(RoundedBorderTextFieldStyle())
                 .padding()
 
                 Spacer()
 
-                // Meter Actions
+                // Buttons
                 HStack {
+                    Button("Reset Searches") {
+                        parkingManager.userSearches.removeAll()
+                        userLocation = nil
+                    }
+                    .padding()
+
                     Button("Initialize Meters") {
                         parkingManager.initializeMeters()
                     }
                     .padding()
-
-                    Button("Reset Searches") {
-                        parkingManager.userSearches.removeAll()
-                    }
-                    .padding()
                 }
 
+                // Display Nearest Meter
                 if let nearest = parkingManager.nearestMeter {
                     VStack(alignment: .leading) {
                         Text("Nearest Green Meter:")
@@ -211,6 +207,7 @@ struct ContentView: View {
                     .padding()
                 }
 
+                // Display Selected Meter
                 if let selected = parkingManager.selectedMeter {
                     VStack(alignment: .leading) {
                         Text("Selected Meter:")
@@ -221,7 +218,27 @@ struct ContentView: View {
                     }
                     .padding()
                 }
+
+                // Display Errors
+                if let error = parkingManager.errorMessage {
+                    Text(error)
+                        .foregroundColor(.red)
+                        .padding()
+                }
             }
+        }
+    }
+
+    private func handleSearch() {
+        let components = locationSearch.searchText.split(separator: ",")
+        if components.count == 2,
+           let lat = Double(components[0]),
+           let lon = Double(components[1]) {
+            userLocation = CLLocationCoordinate2D(latitude: lat, longitude: lon)
+            parkingManager.addUserSearch(at: userLocation!)
+            parkingManager.findNearestGreenMeter(to: userLocation!)
+        } else {
+            parkingManager.errorMessage = "Invalid input. Please use the format 'lat, lon'."
         }
     }
 }
@@ -234,9 +251,10 @@ struct MeterView: View {
         VStack {
             Circle()
                 .fill(meter.status == "available" ? Color.green : meter.status == "occupied" ? Color.red : Color.gray)
-                .frame(width: 10, height: 10)
+                .frame(width: 12, height: 12)
             Text(meter.status.capitalized)
                 .font(.caption)
+                .padding(4)
                 .background(Color.white)
                 .cornerRadius(5)
         }
