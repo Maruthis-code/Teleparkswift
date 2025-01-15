@@ -6,17 +6,12 @@ struct CustomMapAnnotation: Identifiable, Codable {
     let id: UUID
     var coordinate: CLLocationCoordinate2D
     var status: String // "available", "occupied", "out_of_service"
-    var highlighted: Bool
 
     enum CodingKeys: String, CodingKey {
-        case id, latitude, longitude, status, highlighted
-    }
-
-    init(id: UUID = UUID(), coordinate: CLLocationCoordinate2D, status: String, highlighted: Bool = false) {
-        self.id = id
-        self.coordinate = coordinate
-        self.status = status
-        self.highlighted = highlighted
+        case id
+        case latitude
+        case longitude
+        case status
     }
 
     init(from decoder: Decoder) throws {
@@ -26,7 +21,6 @@ struct CustomMapAnnotation: Identifiable, Codable {
         let longitude = try container.decode(CLLocationDegrees.self, forKey: .longitude)
         coordinate = CLLocationCoordinate2D(latitude: latitude, longitude: longitude)
         status = try container.decode(String.self, forKey: .status)
-        highlighted = try container.decode(Bool.self, forKey: .highlighted)
     }
 
     func encode(to encoder: Encoder) throws {
@@ -35,7 +29,12 @@ struct CustomMapAnnotation: Identifiable, Codable {
         try container.encode(coordinate.latitude, forKey: .latitude)
         try container.encode(coordinate.longitude, forKey: .longitude)
         try container.encode(status, forKey: .status)
-        try container.encode(highlighted, forKey: .highlighted)
+    }
+
+    init(id: UUID = UUID(), coordinate: CLLocationCoordinate2D, status: String) {
+        self.id = id
+        self.coordinate = coordinate
+        self.status = status
     }
 }
 
@@ -43,6 +42,8 @@ struct CustomMapAnnotation: Identifiable, Codable {
 class LocationSearch: ObservableObject {
     @Published var region: MKCoordinateRegion
     @Published var errorMessage: String?
+    @Published var recentSearches: [String] = []
+    @Published var mapView = MKMapView()
 
     init() {
         self.region = MKCoordinateRegion(
@@ -51,179 +52,169 @@ class LocationSearch: ObservableObject {
         )
     }
 
-    func searchLocation(query: String) {
-        let geocoder = CLGeocoder()
-        geocoder.geocodeAddressString(query) { [weak self] placemarks, error in
-            DispatchQueue.main.async {
-                if let error = error {
-                    self?.errorMessage = "Error: \(error.localizedDescription)"
-                    return
-                }
-                guard let location = placemarks?.first?.location else {
-                    self?.errorMessage = "No location found for query."
-                    return
-                }
-                self?.setRegion(to: location.coordinate)
-            }
-        }
+    func setRegion(to coordinate: CLLocationCoordinate2D) {
+        region.center = coordinate
     }
 
-    func setRegion(to coordinate: CLLocationCoordinate2D) {
-        withAnimation {
-            region = MKCoordinateRegion(
-                center: coordinate,
-                span: MKCoordinateSpan(latitudeDelta: 0.005, longitudeDelta: 0.005)
-            )
-        }
+    func zoom(by factor: Double) {
+        region.span.latitudeDelta *= factor
+        region.span.longitudeDelta *= factor
     }
 }
 
-// MARK: - Parking Manager ViewModel
+// MARK: - Parking Manager
 class ParkingManager: ObservableObject {
-    @Published var isLoggedIn = false
-    @Published var parkingMeters: [CustomMapAnnotation]
-    @Published var showLoginSheet = false
-    @Published var loginError: String?
-
-    private let adminPassword = "telepark123"
-
-    init() {
-        if let data = UserDefaults.standard.data(forKey: "parkingMeters"),
-           let savedMeters = try? JSONDecoder().decode([CustomMapAnnotation].self, from: data) {
-            self.parkingMeters = savedMeters
-        } else {
-            self.parkingMeters = [
-                CustomMapAnnotation(coordinate: CLLocationCoordinate2D(latitude: 42.6335, longitude: -71.3161), status: "available"),
-                CustomMapAnnotation(coordinate: CLLocationCoordinate2D(latitude: 42.6340, longitude: -71.3155), status: "occupied"),
-                CustomMapAnnotation(coordinate: CLLocationCoordinate2D(latitude: 42.6329, longitude: -71.3170), status: "out_of_service")
-            ]
-        }
-    }
-
-    func saveMeters() {
-        if let encoded = try? JSONEncoder().encode(parkingMeters) {
-            UserDefaults.standard.set(encoded, forKey: "parkingMeters")
-        }
-    }
-
-    func login(password: String) {
-        if password == adminPassword {
-            isLoggedIn = true
-            showLoginSheet = false
-            loginError = nil
-        } else {
-            loginError = "Incorrect password. Please try again."
-        }
-    }
-
-    func logout() {
-        isLoggedIn = false
-    }
-
-    func highlightMeter(id: UUID) {
-        if let index = parkingMeters.firstIndex(where: { $0.id == id }) {
-            parkingMeters[index].highlighted.toggle()
-            saveMeters()
-        }
-    }
+    @Published var parkingMeters: [CustomMapAnnotation] = []
+    @Published var isLoggedIn: Bool = false
+    @Published var showLoginSheet: Bool = false
 
     func addMeter(at coordinate: CLLocationCoordinate2D) {
         let newMeter = CustomMapAnnotation(coordinate: coordinate, status: "available")
         parkingMeters.append(newMeter)
-        saveMeters()
+    }
+
+    func updateMeterStatus(id: UUID, to status: String) {
+        if let index = parkingMeters.firstIndex(where: { $0.id == id }) {
+            parkingMeters[index].status = status
+        }
+    }
+
+    func resetMeters() {
+        parkingMeters.removeAll()
     }
 }
 
-// MARK: - Main Content View
+// MARK: - Content View
 struct ContentView: View {
-    @StateObject private var locationSearch = LocationSearch()
     @StateObject private var parkingManager = ParkingManager()
-    @State private var searchQuery = ""
-    @State private var password = ""
+    @State private var selectedMeter: CustomMapAnnotation?
+    @ObservedObject private var locationSearch = LocationSearch()
+    @State private var searchQuery: String = ""
 
     var body: some View {
         NavigationView {
             VStack {
-                // Header
-                HStack {
-                    Text("TelePark")
-                        .font(.largeTitle)
-                        .padding()
-                    Spacer()
-                    if parkingManager.isLoggedIn {
-                        Button("Logout") {
-                            parkingManager.logout()
-                        }
-                    }
-                }
-
-                // Search Bar
-                TextField("Search for a location", text: $searchQuery)
-                    .textFieldStyle(RoundedBorderTextFieldStyle())
+                // App Header
+                Text("TelePark")
+                    .font(.largeTitle)
+                    .fontWeight(.bold)
                     .padding()
-                    .onSubmit {
-                        locationSearch.searchLocation(query: searchQuery)
-                    }
 
-                // Map View
-                Map(coordinateRegion: $locationSearch.region, annotationItems: parkingManager.parkingMeters) { meter in
-                    MapAnnotation(coordinate: meter.coordinate) {
-                        VStack {
-                            Circle()
-                                .fill(meter.status == "available" ? (meter.highlighted ? Color.blue : Color.green) : Color.red)
-                                .frame(width: 15, height: 15)
+                Divider()
+
+                // Map View with Meters
+                ZStack {
+                    Map(
+                        coordinateRegion: $locationSearch.region,
+                        interactionModes: [.all],
+                        annotationItems: parkingManager.parkingMeters
+                    ) { meter in
+                        MapAnnotation(coordinate: meter.coordinate) {
+                            MeterView(meter: meter)
                                 .onTapGesture {
-                                    parkingManager.highlightMeter(id: meter.id)
+                                    selectedMeter = meter
                                 }
-                            Text(meter.status.capitalized)
-                                .font(.caption)
-                                .padding(4)
-                                .background(Color.white.opacity(0.8))
-                                .cornerRadius(5)
                         }
                     }
+                    .frame(height: 300)
                 }
-                .frame(height: 300)
+
+                // Meter Management Buttons
+                HStack {
+                    Button("Add Meter") {
+                        let centerCoordinate = locationSearch.region.center
+                        parkingManager.addMeter(at: centerCoordinate)
+                        print("Added meter at: \(centerCoordinate.latitude), \(centerCoordinate.longitude)")
+                    }
+                    .padding()
+                    .buttonStyle(.borderedProminent)
+
+                    Button("Reset Meters") {
+                        parkingManager.resetMeters()
+                        print("Reset all meters")
+                    }
+                    .padding()
+                    .buttonStyle(.bordered)
+                }
+
+                // Zoom Controls
+                HStack {
+                    Button(action: {
+                        locationSearch.zoom(by: 0.5)
+                    }) {
+                        Label("Zoom In", systemImage: "plus.magnifyingglass")
+                    }
+                    .padding()
+
+                    Button(action: {
+                        locationSearch.zoom(by: 2.0)
+                    }) {
+                        Label("Zoom Out", systemImage: "minus.magnifyingglass")
+                    }
+                    .padding()
+                }
 
                 Spacer()
 
-                // Admin Actions
-                if parkingManager.isLoggedIn {
-                    Button("Add Meter Here") {
-                        parkingManager.addMeter(at: locationSearch.region.center)
-                    }
-                    .padding()
-                } else {
-                    Button("Login as Admin") {
-                        parkingManager.showLoginSheet = true
+                // Login/Logout Button
+                Button(parkingManager.isLoggedIn ? "Logout" : "Login as Parking Director") {
+                    parkingManager.showLoginSheet.toggle()
+                }
+                .padding()
+
+                // Selected Meter Info
+                if let selected = selectedMeter {
+                    VStack(alignment: .leading) {
+                        Text("Selected Meter:")
+                            .font(.headline)
+                        Text("Latitude: \(selected.coordinate.latitude)")
+                        Text("Longitude: \(selected.coordinate.longitude)")
+                        Text("Status: \(selected.status)")
                     }
                     .padding()
                 }
             }
             .sheet(isPresented: $parkingManager.showLoginSheet) {
                 VStack {
-                    Text("Admin Login")
-                        .font(.headline)
+                    Text(parkingManager.isLoggedIn ? "Logout Successful" : "Login Sheet")
+                        .font(.title)
                         .padding()
-
-                    SecureField("Password", text: $password)
-                        .textFieldStyle(RoundedBorderTextFieldStyle())
-                        .padding()
-
-                    if let error = parkingManager.loginError {
-                        Text(error)
-                            .foregroundColor(.red)
-                            .padding(.bottom)
-                    }
-
-                    Button("Login") {
-                        parkingManager.login(password: password)
-                        password = ""
+                    Button("Close") {
+                        parkingManager.showLoginSheet = false
                     }
                     .padding()
                 }
-                .padding()
             }
+        }
+    }
+}
+
+// MARK: - Meter View
+struct MeterView: View {
+    let meter: CustomMapAnnotation
+
+    var body: some View {
+        VStack {
+            Circle()
+                .fill(meter.status == "available" ? Color.green : meter.status == "occupied" ? Color.red : Color.gray)
+                .frame(width: 10, height: 10)
+            Text(meter.status.capitalized)
+                .font(.caption)
+                .padding(4)
+                .background(Color.white)
+                .cornerRadius(5)
+        }
+    }
+}
+
+// MARK: - Feedback Form View
+struct FeedbackFormView: View {
+    var body: some View {
+        VStack {
+            Text("Feedback Form")
+                .font(.largeTitle)
+                .padding()
+            Link("Open Feedback Form", destination: URL(string: "https://forms.gle/example")!)
         }
     }
 }
