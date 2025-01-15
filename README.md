@@ -14,6 +14,12 @@ struct CustomMapAnnotation: Identifiable, Codable {
         case status
     }
 
+    init(id: UUID = UUID(), latitude: CLLocationDegrees, longitude: CLLocationDegrees, status: String) {
+        self.id = id
+        self.coordinate = CLLocationCoordinate2D(latitude: latitude, longitude: longitude)
+        self.status = status
+    }
+
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         id = try container.decode(UUID.self, forKey: .id)
@@ -29,12 +35,6 @@ struct CustomMapAnnotation: Identifiable, Codable {
         try container.encode(coordinate.latitude, forKey: .latitude)
         try container.encode(coordinate.longitude, forKey: .longitude)
         try container.encode(status, forKey: .status)
-    }
-
-    init(id: UUID = UUID(), coordinate: CLLocationCoordinate2D, status: String) {
-        self.id = id
-        self.coordinate = coordinate
-        self.status = status
     }
 }
 
@@ -65,23 +65,20 @@ class ParkingManager: ObservableObject {
     @Published var nearestMeter: (CustomMapAnnotation, Double)?
     @Published var errorMessage: String?
 
-    // Initialize meters with predefined locations
     func initializeMeters() {
         parkingMeters = [
-            CustomMapAnnotation(coordinate: CLLocationCoordinate2D(latitude: 42.6334, longitude: -71.3162), status: "available"),
-            CustomMapAnnotation(coordinate: CLLocationCoordinate2D(latitude: 42.6385, longitude: -71.3169), status: "occupied"),
-            CustomMapAnnotation(coordinate: CLLocationCoordinate2D(latitude: 42.6400, longitude: -71.3180), status: "available"),
-            CustomMapAnnotation(coordinate: CLLocationCoordinate2D(latitude: 42.6475, longitude: -71.3215), status: "available"),
-            CustomMapAnnotation(coordinate: CLLocationCoordinate2D(latitude: 42.6430, longitude: -71.3120), status: "occupied")
+            CustomMapAnnotation(latitude: 42.6334, longitude: -71.3162, status: "available"),
+            CustomMapAnnotation(latitude: 42.6385, longitude: -71.3169, status: "occupied"),
+            CustomMapAnnotation(latitude: 42.6400, longitude: -71.3180, status: "available"),
+            CustomMapAnnotation(latitude: 42.6475, longitude: -71.3215, status: "available"),
+            CustomMapAnnotation(latitude: 42.6430, longitude: -71.3120, status: "occupied")
         ]
     }
 
-    // Add user search to the history
     func addUserSearch(at coordinate: CLLocationCoordinate2D) {
         userSearches.append(coordinate)
     }
 
-    // Find the nearest green meter
     func findNearestGreenMeter(to location: CLLocationCoordinate2D) {
         let availableMeters = parkingMeters.filter { $0.status == "available" }
         guard !availableMeters.isEmpty else {
@@ -154,26 +151,25 @@ struct ContentView: View {
                 Divider()
 
                 // Map with Annotations
-                ZStack {
-                    Map(
-                        coordinateRegion: $locationSearch.region,
-                        annotationItems: parkingManager.parkingMeters
-                    ) { meter in
-                        MapAnnotation(coordinate: meter.coordinate) {
-                            MeterView(meter: meter)
-                                .onTapGesture {
-                                    parkingManager.selectedMeter = meter
-                                }
-                        }
+                Map(
+                    coordinateRegion: $locationSearch.region,
+                    interactionModes: [.all],
+                    annotationItems: parkingManager.parkingMeters
+                ) { meter in
+                    MapAnnotation(coordinate: meter.coordinate) {
+                        MeterView(meter: meter)
+                            .onTapGesture {
+                                parkingManager.selectedMeter = meter
+                            }
                     }
-                    .frame(height: 300)
-                    .onAppear {
-                        parkingManager.initializeMeters()
-                    }
+                }
+                .frame(height: 300)
+                .onAppear {
+                    parkingManager.initializeMeters()
                 }
 
                 // Search Bar
-                TextField("Search location (lat, lon)", text: $locationSearch.searchText, onCommit: {
+                TextField("Search for location (lat, lon)", text: $locationSearch.searchText, onCommit: {
                     handleSearch()
                 })
                 .textFieldStyle(RoundedBorderTextFieldStyle())
@@ -181,7 +177,7 @@ struct ContentView: View {
 
                 Spacer()
 
-                // Buttons
+                // Actions
                 HStack {
                     Button("Reset Searches") {
                         parkingManager.userSearches.removeAll()
@@ -195,7 +191,7 @@ struct ContentView: View {
                     .padding()
                 }
 
-                // Display Nearest Meter
+                // Display Nearest Green Meter
                 if let nearest = parkingManager.nearestMeter {
                     VStack(alignment: .leading) {
                         Text("Nearest Green Meter:")
@@ -207,7 +203,7 @@ struct ContentView: View {
                     .padding()
                 }
 
-                // Display Selected Meter
+                // Display Selected Meter Info
                 if let selected = parkingManager.selectedMeter {
                     VStack(alignment: .leading) {
                         Text("Selected Meter:")
