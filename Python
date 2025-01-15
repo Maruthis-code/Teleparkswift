@@ -1,0 +1,55 @@
+import random
+from math import radians, sin, cos, sqrt, atan2
+
+def generate_random_coordinates(num_points, lat_range, lon_range):
+    """
+    Generate a list of random latitude and longitude coordinates.
+    """
+    return [(random.uniform(*lat_range), random.uniform(*lon_range)) for _ in range(num_points)]
+
+def haversine_distance(lat1, lon1, lat2, lon2):
+    """
+    Calculate the great-circle distance between two points on the Earth (specified in decimal degrees).
+    """
+    # Convert latitude and longitude from degrees to radians
+    lat1, lon1, lat2, lon2 = map(radians, [lat1, lon1, lat2, lon2])
+
+    # Haversine formula
+    dlat = lat2 - lat1
+    dlon = lon2 - lon1
+    a = sin(dlat / 2) ** 2 + cos(lat1) * cos(lat2) * sin(dlon / 2) ** 2
+    c = 2 * atan2(sqrt(a), sqrt(1 - a))
+    radius_earth_km = 6371  # Radius of Earth in kilometers
+    return radius_earth_km * c
+
+def find_nearest_coordinate(user_location, coordinates):
+    """
+    Find the coordinate closest to the user's location.
+    """
+    closest_coordinate = None
+    smallest_distance = float('inf')
+
+    for coord in coordinates:
+        distance = haversine_distance(user_location[0], user_location[1], coord[0], coord[1])
+        if distance < smallest_distance:
+            smallest_distance = distance
+            closest_coordinate = coord
+
+    return closest_coordinate, smallest_distance
+
+# Generate a random user search location
+user_location = (random.uniform(-90, 90), random.uniform(-180, 180))
+
+# Generate a list of random parking meter coordinates
+parking_meter_coordinates = generate_random_coordinates(10, (-90, 90), (-180, 180))
+
+# Find the nearest parking meter to the user location
+nearest_coordinate, distance = find_nearest_coordinate(user_location, parking_meter_coordinates)
+
+# Display the results
+print(f"User searched location: {user_location}")
+print("Parking meter coordinates:")
+for coord in parking_meter_coordinates:
+    print(coord)
+print(f"\nNearest parking meter: {nearest_coordinate}")
+print(f"Distance: {distance:.2f} km")
