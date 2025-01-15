@@ -6,14 +6,10 @@ struct CustomMapAnnotation: Identifiable, Codable {
     let id: UUID
     var coordinate: CLLocationCoordinate2D
     var status: String // "available", "occupied", "out_of_service"
-    var highlighted: Bool // New field for highlighting
+    var highlighted: Bool
 
     enum CodingKeys: String, CodingKey {
-        case id
-        case latitude
-        case longitude
-        case status
-        case highlighted
+        case id, latitude, longitude, status, highlighted
     }
 
     init(id: UUID = UUID(), coordinate: CLLocationCoordinate2D, status: String, highlighted: Bool = false) {
@@ -47,7 +43,6 @@ struct CustomMapAnnotation: Identifiable, Codable {
 class LocationSearch: ObservableObject {
     @Published var region: MKCoordinateRegion
     @Published var errorMessage: String?
-    @Published var recentSearches: [String] = []
 
     init() {
         self.region = MKCoordinateRegion(
@@ -59,40 +54,26 @@ class LocationSearch: ObservableObject {
     func searchLocation(query: String) {
         let geocoder = CLGeocoder()
         geocoder.geocodeAddressString(query) { [weak self] placemarks, error in
-            if let error = error {
-                DispatchQueue.main.async {
-                    self?.errorMessage = "Error: \(error.localizedDescription)"
-                }
-                return
-            }
-            guard let location = placemarks?.first?.location else {
-                DispatchQueue.main.async {
-                    self?.errorMessage = "No location found for query."
-                }
-                return
-            }
             DispatchQueue.main.async {
+                if let error = error {
+                    self?.errorMessage = "Error: \(error.localizedDescription)"
+                    return
+                }
+                guard let location = placemarks?.first?.location else {
+                    self?.errorMessage = "No location found for query."
+                    return
+                }
                 self?.setRegion(to: location.coordinate)
-                self?.addToRecentSearches(query: query)
             }
         }
     }
 
     func setRegion(to coordinate: CLLocationCoordinate2D) {
         withAnimation {
-            self.region = MKCoordinateRegion(
+            region = MKCoordinateRegion(
                 center: coordinate,
                 span: MKCoordinateSpan(latitudeDelta: 0.005, longitudeDelta: 0.005)
             )
-        }
-    }
-
-    private func addToRecentSearches(query: String) {
-        if !recentSearches.contains(query) {
-            recentSearches.insert(query, at: 0)
-        }
-        if recentSearches.count > 5 {
-            recentSearches.removeLast()
         }
     }
 }
@@ -102,6 +83,7 @@ class ParkingManager: ObservableObject {
     @Published var isLoggedIn = false
     @Published var parkingMeters: [CustomMapAnnotation]
     @Published var showLoginSheet = false
+    @Published var loginError: String?
 
     private let adminPassword = "telepark123"
 
@@ -113,7 +95,7 @@ class ParkingManager: ObservableObject {
             self.parkingMeters = [
                 CustomMapAnnotation(coordinate: CLLocationCoordinate2D(latitude: 42.6335, longitude: -71.3161), status: "available"),
                 CustomMapAnnotation(coordinate: CLLocationCoordinate2D(latitude: 42.6340, longitude: -71.3155), status: "occupied"),
-                CustomMapAnnotation(coordinate: CLLocationCoordinate2D(latitude: 42.6329, longitude: -71.3170), status: "available")
+                CustomMapAnnotation(coordinate: CLLocationCoordinate2D(latitude: 42.6329, longitude: -71.3170), status: "out_of_service")
             ]
         }
     }
@@ -127,6 +109,10 @@ class ParkingManager: ObservableObject {
     func login(password: String) {
         if password == adminPassword {
             isLoggedIn = true
+            showLoginSheet = false
+            loginError = nil
+        } else {
+            loginError = "Incorrect password. Please try again."
         }
     }
 
@@ -158,9 +144,11 @@ struct ContentView: View {
     var body: some View {
         NavigationView {
             VStack {
+                // Header
                 HStack {
                     Text("TelePark")
                         .font(.largeTitle)
+                        .padding()
                     Spacer()
                     if parkingManager.isLoggedIn {
                         Button("Logout") {
@@ -168,28 +156,29 @@ struct ContentView: View {
                         }
                     }
                 }
-                .padding()
 
-                TextField("Search location", text: $searchQuery)
+                // Search Bar
+                TextField("Search for a location", text: $searchQuery)
                     .textFieldStyle(RoundedBorderTextFieldStyle())
                     .padding()
                     .onSubmit {
                         locationSearch.searchLocation(query: searchQuery)
                     }
 
+                // Map View
                 Map(coordinateRegion: $locationSearch.region, annotationItems: parkingManager.parkingMeters) { meter in
                     MapAnnotation(coordinate: meter.coordinate) {
                         VStack {
                             Circle()
                                 .fill(meter.status == "available" ? (meter.highlighted ? Color.blue : Color.green) : Color.red)
-                                .frame(width: 10, height: 10)
+                                .frame(width: 15, height: 15)
                                 .onTapGesture {
                                     parkingManager.highlightMeter(id: meter.id)
                                 }
                             Text(meter.status.capitalized)
                                 .font(.caption)
                                 .padding(4)
-                                .background(Color.white)
+                                .background(Color.white.opacity(0.8))
                                 .cornerRadius(5)
                         }
                     }
@@ -198,6 +187,7 @@ struct ContentView: View {
 
                 Spacer()
 
+                // Admin Actions
                 if parkingManager.isLoggedIn {
                     Button("Add Meter Here") {
                         parkingManager.addMeter(at: locationSearch.region.center)
@@ -214,13 +204,23 @@ struct ContentView: View {
                 VStack {
                     Text("Admin Login")
                         .font(.headline)
+                        .padding()
+
                     SecureField("Password", text: $password)
                         .textFieldStyle(RoundedBorderTextFieldStyle())
                         .padding()
+
+                    if let error = parkingManager.loginError {
+                        Text(error)
+                            .foregroundColor(.red)
+                            .padding(.bottom)
+                    }
+
                     Button("Login") {
                         parkingManager.login(password: password)
                         password = ""
                     }
+                    .padding()
                 }
                 .padding()
             }
