@@ -38,12 +38,83 @@ struct CustomMapAnnotation: Identifiable, Codable {
     }
 }
 
+// MARK: - Extensions
+extension Double {
+    var degreesToRadians: Double {
+        return self * .pi / 180
+    }
+}
+
+extension CLLocationCoordinate2D: Codable {}
+
+// MARK: - Haversine Formula
+func haversineDistance(lat1: Double, lon1: Double, lat2: Double, lon2: Double) -> Double {
+    let radiusEarthKm = 6371.0
+    let dLat = (lat2 - lat1).degreesToRadians
+    let dLon = (lon2 - lon1).degreesToRadians
+    let a = sin(dLat / 2) * sin(dLat / 2) +
+        cos(lat1.degreesToRadians) * cos(lat2.degreesToRadians) *
+        sin(dLon / 2) * sin(dLon / 2)
+    let c = 2 * atan2(sqrt(a), sqrt(1 - a))
+    return radiusEarthKm * c
+}
+
+// MARK: - Parking Manager
+class ParkingManager: ObservableObject {
+    @Published var parkingMeters: [CustomMapAnnotation] = []
+    @Published var userSearches: [CLLocationCoordinate2D] = []
+    @Published var selectedMeter: CustomMapAnnotation?
+    @Published var nearestMeter: (CustomMapAnnotation, Double)?
+
+    func initializeMeters() {
+        parkingMeters = [
+            CustomMapAnnotation(coordinate: CLLocationCoordinate2D(latitude: 42.6334, longitude: -71.3162), status: "available"),
+            CustomMapAnnotation(coordinate: CLLocationCoordinate2D(latitude: 42.6385, longitude: -71.3169), status: "occupied"),
+            CustomMapAnnotation(coordinate: CLLocationCoordinate2D(latitude: 42.6400, longitude: -71.3180), status: "available"),
+            CustomMapAnnotation(coordinate: CLLocationCoordinate2D(latitude: 42.6475, longitude: -71.3215), status: "available"),
+            CustomMapAnnotation(coordinate: CLLocationCoordinate2D(latitude: 42.6430, longitude: -71.3120), status: "occupied")
+        ]
+    }
+
+    func addUserSearch(at coordinate: CLLocationCoordinate2D) {
+        userSearches.append(coordinate)
+    }
+
+    func findNearestGreenMeter(to location: CLLocationCoordinate2D) {
+        let availableMeters = parkingMeters.filter { $0.status == "available" }
+        guard !availableMeters.isEmpty else {
+            nearestMeter = nil
+            return
+        }
+
+        var closestMeter: CustomMapAnnotation?
+        var smallestDistance = Double.greatestFiniteMagnitude
+
+        for meter in availableMeters {
+            let distance = haversineDistance(
+                lat1: location.latitude,
+                lon1: location.longitude,
+                lat2: meter.coordinate.latitude,
+                lon2: meter.coordinate.longitude
+            )
+            if distance < smallestDistance {
+                smallestDistance = distance
+                closestMeter = meter
+            }
+        }
+
+        if let closest = closestMeter {
+            nearestMeter = (closest, smallestDistance)
+        } else {
+            nearestMeter = nil
+        }
+    }
+}
+
 // MARK: - Location Search ViewModel
 class LocationSearch: ObservableObject {
     @Published var region: MKCoordinateRegion
-    @Published var errorMessage: String?
-    @Published var recentSearches: [String] = []
-    @Published var mapView = MKMapView()
+    @Published var searchText: String = ""
 
     init() {
         self.region = MKCoordinateRegion(
@@ -62,39 +133,15 @@ class LocationSearch: ObservableObject {
     }
 }
 
-// MARK: - Parking Manager
-class ParkingManager: ObservableObject {
-    @Published var parkingMeters: [CustomMapAnnotation] = []
-    @Published var isLoggedIn: Bool = false
-    @Published var showLoginSheet: Bool = false
-
-    func addMeter(at coordinate: CLLocationCoordinate2D) {
-        let newMeter = CustomMapAnnotation(coordinate: coordinate, status: "available")
-        parkingMeters.append(newMeter)
-    }
-
-    func updateMeterStatus(id: UUID, to status: String) {
-        if let index = parkingMeters.firstIndex(where: { $0.id == id }) {
-            parkingMeters[index].status = status
-        }
-    }
-
-    func resetMeters() {
-        parkingMeters.removeAll()
-    }
-}
-
 // MARK: - Content View
 struct ContentView: View {
     @StateObject private var parkingManager = ParkingManager()
-    @State private var selectedMeter: CustomMapAnnotation?
     @ObservedObject private var locationSearch = LocationSearch()
-    @State private var searchQuery: String = ""
+    @State private var userLocation: CLLocationCoordinate2D?
 
     var body: some View {
         NavigationView {
             VStack {
-                // App Header
                 Text("TelePark")
                     .font(.largeTitle)
                     .fontWeight(.bold)
@@ -102,85 +149,75 @@ struct ContentView: View {
 
                 Divider()
 
-                // Map View with Meters
+                // Map with Meters
                 ZStack {
                     Map(
                         coordinateRegion: $locationSearch.region,
-                        interactionModes: [.all],
                         annotationItems: parkingManager.parkingMeters
                     ) { meter in
                         MapAnnotation(coordinate: meter.coordinate) {
                             MeterView(meter: meter)
                                 .onTapGesture {
-                                    selectedMeter = meter
+                                    parkingManager.selectedMeter = meter
                                 }
                         }
                     }
                     .frame(height: 300)
                 }
 
-                // Meter Management Buttons
-                HStack {
-                    Button("Add Meter") {
-                        let centerCoordinate = locationSearch.region.center
-                        parkingManager.addMeter(at: centerCoordinate)
-                        print("Added meter at: \(centerCoordinate.latitude), \(centerCoordinate.longitude)")
-                    }
-                    .padding()
-                    .buttonStyle(.borderedProminent)
+                // Search Bar
+                TextField("Search for location (lat, lon)", text: $locationSearch.searchText, onCommit: {
+                    let components = locationSearch.searchText.split(separator: ",")
+                    if components.count == 2,
+                       let lat = Double(components[0]),
+                       let lon = Double(components[1]) {
+                        userLocation = CLLocationCoordinate2D(latitude: lat, longitude: lon)
+                        parkingManager.addUserSearch(at: userLocation!)
+                        parkingManager.findNearestGreenMeter(to: userLocation!)
 
-                    Button("Reset Meters") {
-                        parkingManager.resetMeters()
-                        print("Reset all meters")
+                        if let nearest = parkingManager.nearestMeter {
+                            print("Nearest green meter: \(nearest.0.coordinate), Distance: \(nearest.1) km")
+                        } else {
+                            print("No available green meters nearby.")
+                        }
                     }
-                    .padding()
-                    .buttonStyle(.bordered)
-                }
-
-                // Zoom Controls
-                HStack {
-                    Button(action: {
-                        locationSearch.zoom(by: 0.5)
-                    }) {
-                        Label("Zoom In", systemImage: "plus.magnifyingglass")
-                    }
-                    .padding()
-
-                    Button(action: {
-                        locationSearch.zoom(by: 2.0)
-                    }) {
-                        Label("Zoom Out", systemImage: "minus.magnifyingglass")
-                    }
-                    .padding()
-                }
+                })
+                .textFieldStyle(RoundedBorderTextFieldStyle())
+                .padding()
 
                 Spacer()
 
-                // Login/Logout Button
-                Button(parkingManager.isLoggedIn ? "Logout" : "Login as Parking Director") {
-                    parkingManager.showLoginSheet.toggle()
-                }
-                .padding()
+                // Meter Actions
+                HStack {
+                    Button("Initialize Meters") {
+                        parkingManager.initializeMeters()
+                    }
+                    .padding()
 
-                // Selected Meter Info
-                if let selected = selectedMeter {
+                    Button("Reset Searches") {
+                        parkingManager.userSearches.removeAll()
+                    }
+                    .padding()
+                }
+
+                if let nearest = parkingManager.nearestMeter {
+                    VStack(alignment: .leading) {
+                        Text("Nearest Green Meter:")
+                            .font(.headline)
+                        Text("Latitude: \(nearest.0.coordinate.latitude)")
+                        Text("Longitude: \(nearest.0.coordinate.longitude)")
+                        Text(String(format: "Distance: %.2f km", nearest.1))
+                    }
+                    .padding()
+                }
+
+                if let selected = parkingManager.selectedMeter {
                     VStack(alignment: .leading) {
                         Text("Selected Meter:")
                             .font(.headline)
                         Text("Latitude: \(selected.coordinate.latitude)")
                         Text("Longitude: \(selected.coordinate.longitude)")
                         Text("Status: \(selected.status)")
-                    }
-                    .padding()
-                }
-            }
-            .sheet(isPresented: $parkingManager.showLoginSheet) {
-                VStack {
-                    Text(parkingManager.isLoggedIn ? "Logout Successful" : "Login Sheet")
-                        .font(.title)
-                        .padding()
-                    Button("Close") {
-                        parkingManager.showLoginSheet = false
                     }
                     .padding()
                 }
@@ -200,21 +237,8 @@ struct MeterView: View {
                 .frame(width: 10, height: 10)
             Text(meter.status.capitalized)
                 .font(.caption)
-                .padding(4)
                 .background(Color.white)
                 .cornerRadius(5)
-        }
-    }
-}
-
-// MARK: - Feedback Form View
-struct FeedbackFormView: View {
-    var body: some View {
-        VStack {
-            Text("Feedback Form")
-                .font(.largeTitle)
-                .padding()
-            Link("Open Feedback Form", destination: URL(string: "https://forms.gle/example")!)
         }
     }
 }
